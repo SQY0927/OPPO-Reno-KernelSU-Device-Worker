@@ -302,7 +302,7 @@ jobs:
           git clone --depth=1 "${{ env.KPM_REPO }}" KernelPatch
           cd KernelPatch
           echo "## 编译 kpimg"
-          make -C kernel kpimg
+          make -C kernel kpimg TARGET_COMPILE=aarch64-linux-android- LD=llvm-lld
           echo "## 编译 kptools"
           make -C tools
           echo "## 验证产物"
