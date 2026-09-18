@@ -223,20 +223,20 @@ jobs:
             rm -f block/oppo_foreground_io_opt
             mkdir -p block/oppo_foreground_io_opt
             # 创建 Kconfig (定义 CONFIG_OPPO_FG_IO_OPT，设为 n 因源码未公开)
-            cat > block/oppo_foreground_io_opt/Kconfig << 'KCEOF'
-config OPPO_FG_IO_OPT
-	bool "OPPO foreground IO optimization"
-	default n
-	help
-	  OPPO foreground IO optimization. Source code not available
-	  in published kernel source. Disabled to avoid build issues.
-KCEOF
+            printf '%s\n' \
+              'config OPPO_FG_IO_OPT' \
+              '	bool "OPPO foreground IO optimization"' \
+              '	default n' \
+              '	help' \
+              '	  OPPO foreground IO optimization. Source code not available' \
+              '	  in published kernel source. Disabled to avoid build issues.' \
+              > block/oppo_foreground_io_opt/Kconfig
             # 创建 Makefile (空，源码不在已发布内核源码中)
-            cat > block/oppo_foreground_io_opt/Makefile << 'MEOF'
-# OPPO foreground IO optimization Makefile
-# Source files not available in published kernel source
-# obj-y += foreground_io_opt.o
-MEOF
+            printf '%s\n' \
+              '# OPPO foreground IO optimization Makefile' \
+              '# Source files not available in published kernel source' \
+              '# obj-y += foreground_io_opt.o' \
+              > block/oppo_foreground_io_opt/Makefile
             echo "  已创建 block/oppo_foreground_io_opt/Kconfig 和 Makefile"
           fi
           
@@ -244,7 +244,7 @@ MEOF
           find . -type l ! -exec test -e {} \; -print 2>/dev/null | while read -r linkpath; do
             linkdir=$(dirname "$linkpath")
             # 如果坏链接所在目录有 Kconfig 或 Makefile 引用
-            if find "$linkdir" -maxdepth 1 -name "Kconfig*" -o -name "Makefile" 2>/dev/null | grep -q .; then
+            if find "$linkdir" -maxdepth 1 \( -name "Kconfig*" -o -name "Makefile" \) 2>/dev/null | grep -q .; then
               echo "  修复坏链接: $linkpath"
               rm -f "$linkpath"
               mkdir -p "$linkpath"
