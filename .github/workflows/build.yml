@@ -215,40 +215,49 @@ jobs:
           echo "正在修复缺失的 Kconfig 和符号链接..."
           
           # 1. 修复 block/oppo_foreground_io_opt 符号链接
-          # 原始: 符号链接 -> ../../../vendor/oplus/kernel/oplus_performance/oppo_foreground_io_opt (不存在)
-          # block/Makefile 引用: obj-$(CONFIG_OPPO_FG_IO_OPT) += oppo_foreground_io_opt/
-          # block/Kconfig 引用: source "block/oppo_foreground_io_opt/Kconfig"
+          # 原始符号链接: block/oppo_foreground_io_opt -> ../../../vendor/oplus/kernel/oplus_performance/oppo_foreground_io_opt
+          # 实际目录: vendor/oplus/kernel/oplus_performance/foreground_io_opt (无 oppo_ 前缀)
+          # 需要创建 oppo_foreground_io_opt -> foreground_io_opt 的符号链接
           if [ -L block/oppo_foreground_io_opt ] && [ ! -e block/oppo_foreground_io_opt ]; then
             echo "  修复坏符号链接: block/oppo_foreground_io_opt"
-            rm -f block/oppo_foreground_io_opt
-            mkdir -p block/oppo_foreground_io_opt
-            # 创建 Kconfig (定义 CONFIG_OPPO_FG_IO_OPT，设为 n 因源码未公开)
-            printf '%s\n' \
-              'config OPPO_FG_IO_OPT' \
-              '	bool "OPPO foreground IO optimization"' \
-              '	default n' \
-              '	help' \
-              '	  OPPO foreground IO optimization. Source code not available' \
-              '	  in published kernel source. Disabled to avoid build issues.' \
-              > block/oppo_foreground_io_opt/Kconfig
-            # 创建 Makefile (空，源码不在已发布内核源码中)
-            printf '%s\n' \
-              '# OPPO foreground IO optimization Makefile' \
-              '# Source files not available in published kernel source' \
-              '# obj-y += foreground_io_opt.o' \
-              > block/oppo_foreground_io_opt/Makefile
-            echo "  已创建 block/oppo_foreground_io_opt/Kconfig 和 Makefile"
+            # 检查实际源码目录是否存在
+            if [ -d vendor/oplus/kernel/oplus_performance/foreground_io_opt ]; then
+              echo "  发现实际源码目录: vendor/oplus/kernel/oplus_performance/foreground_io_opt"
+              # 创建 oppo_foreground_io_opt -> foreground_io_opt 符号链接
+              ln -sf foreground_io_opt vendor/oplus/kernel/oplus_performance/oppo_foreground_io_opt
+              echo "  已创建符号链接: oppo_foreground_io_opt -> foreground_io_opt"
+              # 验证原始符号链接现在可以解析
+              if [ -e block/oppo_foreground_io_opt ]; then
+                echo "  原始符号链接已修复，可以正常解析"
+                ls -la block/oppo_foreground_io_opt/
+              else
+                echo "  符号链接仍无法解析，创建目录替代"
+                rm -f block/oppo_foreground_io_opt
+                mkdir -p block/oppo_foreground_io_opt
+                cp -r vendor/oplus/kernel/oplus_performance/foreground_io_opt/* block/oppo_foreground_io_opt/
+              fi
+            else
+              echo "  源码目录不存在，创建 stub"
+              rm -f block/oppo_foreground_io_opt
+              mkdir -p block/oppo_foreground_io_opt
+              printf '%s\n' \
+                'config OPPO_FG_IO_OPT' \
+                '	bool "OPPO foreground IO optimization"' \
+                '	default n' \
+                '	---help---' \
+                '	  Source code not available.' \
+                > block/oppo_foreground_io_opt/Kconfig
+              printf '%s\n' '# Stub Makefile' > block/oppo_foreground_io_opt/Makefile
+            fi
           fi
           
-          # 2. 检查并修复其他坏符号链接指向的 Kconfig
+          # 2. 检查并修复其他坏符号链接
           find . -type l ! -exec test -e {} \; -print 2>/dev/null | while read -r linkpath; do
             linkdir=$(dirname "$linkpath")
-            # 如果坏链接所在目录有 Kconfig 或 Makefile 引用
             if find "$linkdir" -maxdepth 1 \( -name "Kconfig*" -o -name "Makefile" \) 2>/dev/null | grep -q .; then
               echo "  修复坏链接: $linkpath"
               rm -f "$linkpath"
               mkdir -p "$linkpath"
-              # 创建空 Kconfig 和 Makefile
               [ ! -f "$linkpath/Kconfig" ] && printf '# Kconfig stub\n' > "$linkpath/Kconfig"
               [ ! -f "$linkpath/Makefile" ] && printf '# Makefile stub\n' > "$linkpath/Makefile"
             fi
