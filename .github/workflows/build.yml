@@ -113,8 +113,7 @@ jobs:
         run: |
           echo "$HOME/toolchain/clang/bin" >> $GITHUB_PATH
           echo "$HOME/toolchain/gcc/bin" >> $GITHUB_PATH
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
+          # 使用 GCC 编译（不设 CC=clang，避免 OPPO Makefile CLANG_TRIPLE 检查）
           echo "CROSS_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-" >> $GITHUB_ENV
           echo "CROSS_COMPILE_ARM32=$HOME/toolchain/gcc/bin/arm-linux-androideabi-" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
@@ -132,6 +131,29 @@ jobs:
           git log -1 --format="%H %s (%ci)"
           echo "## 内核版本"
           make ARCH=arm64 kernelversion 2>&1 | head -3
+
+      - name: 合并 OPPO 内核模块和设备树仓库
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          echo "正在克隆 OPPO 内核模块和设备树仓库..."
+          git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" \
+            "https://github.com/oppo-source/android_kernel_modules_and_devicetree_oppo_sdm710" \
+            modules_devicetree
+          echo "## 仓库结构"
+          find modules_devicetree -type d | head -20
+          echo "## 正在合并模块文件到内核源码树..."
+          if [ -d modules_devicetree/source/android/vendor ]; then
+            mkdir -p kernel/vendor
+            cp -rl modules_devicetree/source/android/vendor/* kernel/vendor/ 2>/dev/null || \
+              cp -r modules_devicetree/source/android/vendor/* kernel/vendor/
+            echo "## 已合并 vendor 目录"
+            find kernel/vendor -name "Kconfig" -exec echo "  发现 Kconfig: {}" \;
+          fi
+          # 同时检查是否有 devicetree 相关文件
+          if [ -d modules_devicetree/source/android/vendor/oplus/kernel ]; then
+            echo "## oplus kernel 模块目录:"
+            find modules_devicetree/source/android/vendor/oplus/kernel -type d
+          fi
 
       - name: 集成 KernelSU-Next（仅 ksu-kpm 变体）
         if: steps.variant_gate.outputs.skip != 'true' && matrix.variant == 'ksu-kpm'
@@ -158,25 +180,95 @@ jobs:
           ls -la drivers/kernelsu 2>&1 || echo "未找到 drivers/kernelsu 符号链接"
           grep -l "KernelSU\|SukiSU" drivers/Kconfig 2>&1 || echo "SukiSU 未添加到 drivers/Kconfig"
 
-      - name: 应用内核配置片段
+      - name: 应用内核配置（使用设备提取的 config）
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           cd kernel
-          # KPM 片段应用于所有变体（kptools 需要 kallsyms）
-          echo "正在应用 KPM 配置片段..."
-          cat $GITHUB_WORKSPACE/configs/kpm.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+          # 使用设备提取的 /proc/config.gz 解压后的 config 作为 .config
+          echo "正在复制设备提取的内核配置..."
+          cp $GITHUB_WORKSPACE/device_config .config
+          # 追加 KPM 配置片段（kptools 需要 kallsyms）
+          echo "正在追加 KPM 配置片段..."
+          cat $GITHUB_WORKSPACE/configs/kpm.fragment >> .config
           # KSU 片段仅应用于 ksu-kpm 变体
           if [ "${{ matrix.variant }}" = "ksu-kpm" ]; then
-            echo "正在应用 KernelSU 配置片段..."
-            cat $GITHUB_WORKSPACE/configs/ksu.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+            echo "正在追加 KernelSU 配置片段..."
+            cat $GITHUB_WORKSPACE/configs/ksu.fragment >> .config
           fi
           # SukiSU 片段仅应用于 suki-kpm 变体
           if [ "${{ matrix.variant }}" = "suki-kpm" ]; then
-            echo "正在应用 SukiSU 配置片段..."
-            cat $GITHUB_WORKSPACE/configs/suki.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+            echo "正在追加 SukiSU 配置片段..."
+            cat $GITHUB_WORKSPACE/configs/suki.fragment >> .config
           fi
-          echo "## ${{ env.DEFCONFIG }} 最后 25 行"
-          tail -25 arch/arm64/configs/${{ env.DEFCONFIG }}
+          echo "## .config 行数: $(wc -l < .config)"
+          echo "## OPPO_FG_IO_OPT 状态:"
+          grep -E "OPPO_FG_IO_OPT" .config || echo "  (未设置)"
+          echo "## KSU 状态:"
+          grep -E "CONFIG_KSU" .config || echo "  (未设置)"
+          echo "## KALLSYMS 状态:"
+          grep -E "KALLSYMS" .config | head -5
+
+      - name: 修复缺失的 Kconfig 和符号链接
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          cd kernel
+          echo "正在修复缺失的 Kconfig 和符号链接..."
+          
+          # 1. 修复 block/oppo_foreground_io_opt 符号链接
+          # 原始: 符号链接 -> ../../../vendor/oplus/kernel/oplus_performance/oppo_foreground_io_opt (不存在)
+          # block/Makefile 引用: obj-$(CONFIG_OPPO_FG_IO_OPT) += oppo_foreground_io_opt/
+          # block/Kconfig 引用: source "block/oppo_foreground_io_opt/Kconfig"
+          if [ -L block/oppo_foreground_io_opt ] && [ ! -e block/oppo_foreground_io_opt ]; then
+            echo "  修复坏符号链接: block/oppo_foreground_io_opt"
+            rm -f block/oppo_foreground_io_opt
+            mkdir -p block/oppo_foreground_io_opt
+            # 创建 Kconfig (定义 CONFIG_OPPO_FG_IO_OPT，设为 n 因源码未公开)
+            cat > block/oppo_foreground_io_opt/Kconfig << 'KCEOF'
+config OPPO_FG_IO_OPT
+	bool "OPPO foreground IO optimization"
+	default n
+	help
+	  OPPO foreground IO optimization. Source code not available
+	  in published kernel source. Disabled to avoid build issues.
+KCEOF
+            # 创建 Makefile (空，源码不在已发布内核源码中)
+            cat > block/oppo_foreground_io_opt/Makefile << 'MEOF'
+# OPPO foreground IO optimization Makefile
+# Source files not available in published kernel source
+# obj-y += foreground_io_opt.o
+MEOF
+            echo "  已创建 block/oppo_foreground_io_opt/Kconfig 和 Makefile"
+          fi
+          
+          # 2. 检查并修复其他坏符号链接指向的 Kconfig
+          find . -type l ! -exec test -e {} \; -print 2>/dev/null | while read -r linkpath; do
+            linkdir=$(dirname "$linkpath")
+            # 如果坏链接所在目录有 Kconfig 或 Makefile 引用
+            if find "$linkdir" -maxdepth 1 -name "Kconfig*" -o -name "Makefile" 2>/dev/null | grep -q .; then
+              echo "  修复坏链接: $linkpath"
+              rm -f "$linkpath"
+              mkdir -p "$linkpath"
+              # 创建空 Kconfig 和 Makefile
+              [ ! -f "$linkpath/Kconfig" ] && printf '# Kconfig stub\n' > "$linkpath/Kconfig"
+              [ ! -f "$linkpath/Makefile" ] && printf '# Makefile stub\n' > "$linkpath/Makefile"
+            fi
+          done
+          
+          # 3. 注释掉仍缺失的 Kconfig source 引用
+          grep -rn 'source "' --include="Kconfig*" . 2>/dev/null | while IFS=: read -r kfile lineno content; do
+            src=$(echo "$content" | sed -n 's/.*source "\(.*\)".*/\1/p')
+            [ -z "$src" ] && continue
+            kdir=$(dirname "$kfile")
+            target="$kdir/$src"
+            if [[ "$src" = /* ]]; then
+              target=".$src"
+            fi
+            if [ ! -f "$target" ]; then
+              echo "  注释掉缺失引用: $kfile:$lineno -> $src"
+              sed -i "${lineno}s|^|# 已禁用(文件缺失): |" "$kfile"
+            fi
+          done
+          echo "## 修复完成"
 
       - name: 编译内核
         if: steps.variant_gate.outputs.skip != 'true'
@@ -186,13 +278,12 @@ jobs:
           cd kernel
           echo "## 调试信息: CLANG_TRIPLE=$CLANG_TRIPLE"
           echo "## 调试信息: CROSS_COMPILE=$CROSS_COMPILE"
-          echo "## 调试信息: GCC=$($CROSS_COMPILE gcc -version 2>&1 | head -1)"
-          # 使用 GCC 编译，避免 OPPO Makefile 的 Clang CLANG_TRIPLE 检查
-          # OPPO 4.9 内核原生支持 GCC 4.9 编译
-          echo "## 正在从 ${{ env.DEFCONFIG }} 生成 .config"
-          make ARCH=arm64 ${{ env.DEFCONFIG }}
+          echo "## 调试信息: GCC=$(${CROSS_COMPILE}gcc --version 2>&1 | head -1)"
+          # 使用设备提取的 .config，通过 olddefconfig 更新
+          echo "## 正在运行 make olddefconfig（基于设备配置）"
+          make ARCH=arm64 olddefconfig
           echo "## 验证关键配置项"
-          grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
+          grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OPPO_FG_IO_OPT)" .config || true
           echo "## 正在编译内核（约需 30-60 分钟）"
           make ARCH=arm64 -j"$(nproc)" \
             HOSTCC=gcc HOSTCXX=g++ 2>&1 | tail -300
