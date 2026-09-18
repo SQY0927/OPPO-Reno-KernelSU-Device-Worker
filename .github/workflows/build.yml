@@ -82,11 +82,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libncurses5-dev libssl-dev libelf-dev \
-            zip unzip curl wget git python3 ccache lld
+            zip unzip curl wget git python3 ccache lld \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
           # 内核 4.9 脚本使用 Python 2 语法，安装 python2 并设为默认
           sudo apt-get install -y python2 || true
           sudo ln -sf /usr/bin/python2 /usr/local/bin/python || true
           python --version 2>&1 || echo "python2 未安装，将修复脚本兼容性"
+          # 验证交叉编译器
+          aarch64-linux-gnu-gcc --version | head -1
 
       - name: 下载 Clang 工具链 (AOSP r383902 / Clang 11)
         if: steps.variant_gate.outputs.skip != 'true'
@@ -100,26 +103,20 @@ jobs:
           tar -xzf clang.tar.gz -C $HOME/toolchain/clang
           $HOME/toolchain/clang/bin/clang --version | head -3
 
-      - name: 下载 GCC 工具链 (aarch64-linux-android-4.9)
+      - name: 下载 GCC 工具链 (Ubuntu 系统交叉编译器)
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
-          mkdir -p $HOME/toolchain/gcc
-          cd /tmp
-          echo "正在下载 AOSP GCC 4.9 ..."
-          wget -q --tries=3 --retry-connrefused --waitretry=5 \
-            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" \
-            -O gcc.tar.gz
-          tar -xzf gcc.tar.gz -C $HOME/toolchain/gcc
-          ls $HOME/toolchain/gcc/bin/ | head -5
+          echo "使用 Ubuntu 系统交叉编译器（gcc-aarch64-linux-gnu）"
+          echo "GCC 版本: $(aarch64-linux-gnu-gcc --version | head -1)"
+          echo "ARM32 版本: $(arm-linux-gnueabihf-gcc --version | head -1)"
 
       - name: 导出工具链环境变量
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           echo "$HOME/toolchain/clang/bin" >> $GITHUB_PATH
-          echo "$HOME/toolchain/gcc/bin" >> $GITHUB_PATH
-          # 使用 GCC 编译（不设 CC=clang，避免 OPPO Makefile CLANG_TRIPLE 检查）
-          echo "CROSS_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=$HOME/toolchain/gcc/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+          # 使用 Ubuntu 系统交叉编译器
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabihf-" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "KBUILD_BUILD_USER=github-actions" >> $GITHUB_ENV
@@ -341,20 +338,11 @@ jobs:
           echo "正在克隆并编译 KernelPatch..."
           git clone --depth=1 "${{ env.KPM_REPO }}" KernelPatch
           cd KernelPatch
-          echo "## GCC 工具链检查"
-          ls -la $HOME/toolchain/gcc/bin/aarch64-linux-android-gcc* 2>/dev/null || echo "  AOSP GCC 不存在，使用系统交叉编译器"
-          if [ ! -x "$HOME/toolchain/gcc/bin/aarch64-linux-android-gcc" ]; then
-            echo "  安装 gcc-aarch64-linux-gnu 作为替代..."
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-            export TARGET_COMPILE=aarch64-linux-gnu-
-          else
-            export TARGET_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-
-          fi
-          echo "## TARGET_COMPILE=$TARGET_COMPILE"
+          echo "## TARGET_COMPILE=aarch64-linux-gnu-"
           # 禁用 stack-protector（Ubuntu GCC 默认启用，KernelPatch 不需要）
           sed -i 's/-Wall/-Wall -fno-stack-protector -fno-pie/g' kernel/Makefile
           echo "## 编译 kpimg"
-          make -C kernel kpimg TARGET_COMPILE="$TARGET_COMPILE"
+          make -C kernel kpimg TARGET_COMPILE=aarch64-linux-gnu-
           echo "## 编译 kptools"
           # 将 kernel 目录中生成的头文件链接到 tools 目录（不修改 include 路径，避免系统头文件冲突）
           find kernel -name "preset.h" -exec ln -sf "$(pwd)/{}" tools/preset.h \; 2>/dev/null || true
