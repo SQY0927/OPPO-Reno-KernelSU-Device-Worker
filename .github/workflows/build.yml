@@ -1,74 +1,82 @@
-name: Build OPPO Reno SDM710 Kernel (KPM / KSU+KPM)
+name: 编译 OPPO Reno SDM710 内核 (KPM / KSU+KPM / SukiSU+KPM)
 
 on:
   workflow_dispatch:
     inputs:
       build_kpm_only:
-        description: 'Build KPM-only boot (no KernelSU)'
+        description: '编译 KPM-only 版本（不含 KernelSU）'
         type: boolean
         default: true
       build_ksu_kpm:
-        description: 'Build KernelSU + KPM boot'
+        description: '编译 KernelSU + KPM 版本'
+        type: boolean
+        default: true
+      build_suki_kpm:
+        description: '编译 SukiSU + KPM 版本'
         type: boolean
         default: true
   push:
     branches: [main, master]
 
 env:
-  # OPPO Reno (SDM710) kernel source
+  # OPPO Reno (SDM710) 内核源码
   KERNEL_REPO: https://github.com/oppo-source/android_kernel_oppo_sdm710
   KERNEL_BRANCH: oppo/sdm710_r_11.0_reno
   DEFCONFIG: sdm670-perf_defconfig
-  # KernelSU-Next (FULL source integration for 4.9 kernels)
+  # KernelSU-Next（4.9 内核 FULL 源码集成）
   KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next
   KSU_BRANCH: dev
+  # SukiSU-Ultra（KernelSU 增强分支，内置 KPM）
+  SUKI_REPO: https://github.com/SukiSU-Ultra/SukiSU-Ultra
+  SUKI_BRANCH: main
   # KernelPatch (KPM) - kpimg + kptools
   KPM_REPO: https://github.com/bmax121/KernelPatch
-  # AnyKernel3 packaging
+  # AnyKernel3 打包工具
   ANYKERNEL3_REPO: https://github.com/osm0sis/AnyKernel3
   ARCH: arm64
   SUBARCH: arm64
 
 jobs:
   build:
-    name: Build ${{ matrix.variant }}
+    name: 编译 ${{ matrix.variant }}
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        variant: [kpm-only, ksu-kpm]
+        variant: [kpm-only, ksu-kpm, suki-kpm]
 
     steps:
-      - name: Checkout this repo
+      - name: 检出本仓库
         uses: actions/checkout@v4
 
-      - name: Decide whether to skip variant
+      - name: 判断是否跳过该变体
         id: variant_gate
         run: |
           SKIP="false"
           if [ "${{ matrix.variant }}" = "kpm-only" ] && [ "${{ github.event.inputs.build_kpm_only }}" = "false" ]; then SKIP="true"; fi
           if [ "${{ matrix.variant }}" = "ksu-kpm" ] && [ "${{ github.event.inputs.build_ksu_kpm }}" = "false" ]; then SKIP="true"; fi
+          if [ "${{ matrix.variant }}" = "suki-kpm" ] && [ "${{ github.event.inputs.build_suki_kpm }}" = "false" ]; then SKIP="true"; fi
           echo "skip=$SKIP" >> $GITHUB_OUTPUT
-          echo "Event inputs: kpm_only=${{ github.event.inputs.build_kpm_only }} ksu_kpm=${{ github.event.inputs.build_ksu_kpm }}"
+          echo "输入参数: kpm_only=${{ github.event.inputs.build_kpm_only }} ksu_kpm=${{ github.event.inputs.build_ksu_kpm }} suki_kpm=${{ github.event.inputs.build_suki_kpm }}"
 
-      - name: Skip this variant (disabled)
+      - name: 跳过已禁用的变体
         if: steps.variant_gate.outputs.skip == 'true'
         run: |
-          echo "Variant ${{ matrix.variant }} is disabled by input, skipping."
+          echo "变体 ${{ matrix.variant }} 已被禁用，跳过编译。"
           exit 0
 
-      - name: Free disk space
+      - name: 释放磁盘空间
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
-          echo "== Disk usage before cleanup =="
+          echo "== 清理前磁盘使用 =="
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache
           sudo apt-get clean
-          echo "== Disk usage after cleanup =="
+          echo "== 清理后磁盘使用 =="
           df -h /
 
-      - name: Install build dependencies
+      - name: 安装编译依赖
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           sudo apt-get update
@@ -76,31 +84,31 @@ jobs:
             build-essential bc bison flex libncurses5-dev libssl-dev libelf-dev \
             zip unzip curl wget git python3 ccache lld
 
-      - name: Download Clang toolchain (AOSP r383902 / Clang 11)
+      - name: 下载 Clang 工具链 (AOSP r383902 / Clang 11)
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           mkdir -p $HOME/toolchain/clang
           cd /tmp
-          echo "Downloading AOSP Clang r383902 ..."
+          echo "正在下载 AOSP Clang r383902 ..."
           wget -q --tries=3 --retry-connrefused --waitretry=5 \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r48/clang-r383902.tar.gz" \
             -O clang.tar.gz
           tar -xzf clang.tar.gz -C $HOME/toolchain/clang
           $HOME/toolchain/clang/bin/clang --version | head -3
 
-      - name: Download GCC toolchain (aarch64-linux-android-4.9)
+      - name: 下载 GCC 工具链 (aarch64-linux-android-4.9)
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           mkdir -p $HOME/toolchain/gcc
           cd /tmp
-          echo "Downloading AOSP GCC 4.9 ..."
+          echo "正在下载 AOSP GCC 4.9 ..."
           wget -q --tries=3 --retry-connrefused --waitretry=5 \
             "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" \
             -O gcc.tar.gz
           tar -xzf gcc.tar.gz -C $HOME/toolchain/gcc
           ls $HOME/toolchain/gcc/bin/ | head -5
 
-      - name: Export toolchain env
+      - name: 导出工具链环境变量
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           echo "$HOME/toolchain/clang/bin" >> $GITHUB_PATH
@@ -114,76 +122,100 @@ jobs:
           echo "KBUILD_BUILD_USER=github-actions" >> $GITHUB_ENV
           echo "KBUILD_BUILD_HOST=cloud" >> $GITHUB_ENV
 
-      - name: Clone OPPO Reno SDM710 kernel source
+      - name: 克隆 OPPO Reno SDM710 内核源码
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
+          echo "正在克隆 OPPO Reno SDM710 内核源码..."
           git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" "${{ env.KERNEL_REPO }}" kernel
           cd kernel
-          echo "## Last commit"
+          echo "## 最近一次提交"
           git log -1 --format="%H %s (%ci)"
-          echo "## Kernel version"
+          echo "## 内核版本"
           make ARCH=arm64 kernelversion 2>&1 | head -3
 
-      - name: Apply KernelSU-Next integration (ksu-kpm variant only)
+      - name: 集成 KernelSU-Next（仅 ksu-kpm 变体）
         if: steps.variant_gate.outputs.skip != 'true' && matrix.variant == 'ksu-kpm'
         run: |
+          echo "正在集成 KernelSU-Next..."
           git clone --depth=1 -b "${{ env.KSU_BRANCH }}" "${{ env.KSU_REPO }}" KernelSU-Next
           cd kernel
-          # setup.sh must be run from the kernel source root.
-          # It symlinks KernelSU driver into drivers/kernelsu and edits Kconfig/Makefile.
+          # setup.sh 必须在内核源码根目录运行
+          # 它将 KernelSU 驱动符号链接到 drivers/kernelsu 并修改 Kconfig/Makefile
           ../KernelSU-Next/kernel/setup.sh
-          echo "## Verifying KSU integration"
-          ls -la drivers/kernelsu 2>&1 || echo "drivers/kernelsu symlink not found"
-          grep -l "KernelSU" drivers/Kconfig 2>&1 || echo "KSU not added to drivers/Kconfig"
+          echo "## 验证 KSU 集成"
+          ls -la drivers/kernelsu 2>&1 || echo "未找到 drivers/kernelsu 符号链接"
+          grep -l "KernelSU" drivers/Kconfig 2>&1 || echo "KSU 未添加到 drivers/Kconfig"
 
-      - name: Apply kernel config fragments
+      - name: 集成 SukiSU-Ultra（仅 suki-kpm 变体）
+        if: steps.variant_gate.outputs.skip != 'true' && matrix.variant == 'suki-kpm'
+        run: |
+          echo "正在集成 SukiSU-Ultra (builtin 分支)..."
+          cd kernel
+          # SukiSU-Ultra 使用 curl 管道方式运行 setup.sh
+          # builtin 参数适用于非 GKI 内核（如 4.9）
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${{ env.SUKI_BRANCH }}/kernel/setup.sh" | bash -s builtin
+          echo "## 验证 SukiSU 集成"
+          ls -la drivers/kernelsu 2>&1 || echo "未找到 drivers/kernelsu 符号链接"
+          grep -l "KernelSU\|SukiSU" drivers/Kconfig 2>&1 || echo "SukiSU 未添加到 drivers/Kconfig"
+
+      - name: 应用内核配置片段
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           cd kernel
-          # KPM fragment applies to BOTH variants (kptools needs kallsyms)
+          # KPM 片段应用于所有变体（kptools 需要 kallsyms）
+          echo "正在应用 KPM 配置片段..."
           cat $GITHUB_WORKSPACE/configs/kpm.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
-          # KSU fragment applies only to ksu-kpm variant
+          # KSU 片段仅应用于 ksu-kpm 变体
           if [ "${{ matrix.variant }}" = "ksu-kpm" ]; then
+            echo "正在应用 KernelSU 配置片段..."
             cat $GITHUB_WORKSPACE/configs/ksu.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
           fi
-          echo "## Last 25 lines of ${{ env.DEFCONFIG }}"
+          # SukiSU 片段仅应用于 suki-kpm 变体
+          if [ "${{ matrix.variant }}" = "suki-kpm" ]; then
+            echo "正在应用 SukiSU 配置片段..."
+            cat $GITHUB_WORKSPACE/configs/suki.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+          fi
+          echo "## ${{ env.DEFCONFIG }} 最后 25 行"
           tail -25 arch/arm64/configs/${{ env.DEFCONFIG }}
 
-      - name: Build kernel
+      - name: 编译内核
         if: steps.variant_gate.outputs.skip != 'true'
         env:
           CLANG_TRIPLE: aarch64-linux-android-
         run: |
           cd kernel
-          echo "## DEBUG: CLANG_TRIPLE=$CLANG_TRIPLE"
-          echo "## DEBUG: CROSS_COMPILE=$CROSS_COMPILE"
-          echo "## DEBUG: CC=$(which clang)"
+          echo "## 调试信息: CLANG_TRIPLE=$CLANG_TRIPLE"
+          echo "## 调试信息: CROSS_COMPILE=$CROSS_COMPILE"
+          echo "## 调试信息: CC=$(which clang)"
           clang --version | head -2
-          echo "## Generating .config from ${{ env.DEFCONFIG }}"
+          echo "## 正在从 ${{ env.DEFCONFIG }} 生成 .config"
           make ARCH=arm64 ${{ env.DEFCONFIG }} \
-            CC=clang HOSTCC=clang HOSTCXX=clang++
-          echo "## Verifying key config flags"
-          grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
-          echo "## Building kernel (this can take ~30-60 min)"
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            CLANG_TRIPLE=aarch64-linux-android-
+          echo "## 验证关键配置项"
+          grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
+          echo "## 正在编译内核（约需 30-60 分钟）"
           make ARCH=arm64 -j"$(nproc)" \
             CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            CLANG_TRIPLE=aarch64-linux-android- \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump 2>&1 | tail -300
-          echo "## Build outputs"
+          echo "## 编译产物"
           ls -la arch/arm64/boot/
 
-      - name: Build KernelPatch (kpimg + kptools)
+      - name: 编译 KernelPatch (kpimg + kptools)
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
+          echo "正在克隆并编译 KernelPatch..."
           git clone --depth=1 "${{ env.KPM_REPO }}" KernelPatch
           cd KernelPatch
-          echo "## Building kpimg"
+          echo "## 编译 kpimg"
           make -C kernel kpimg
-          echo "## Building kptools"
+          echo "## 编译 kptools"
           make -C tools
-          echo "## Verifying outputs"
+          echo "## 验证产物"
           ls -la kernel/kpimg tools/kptools
 
-      - name: Patch kernel image with KPM (inject kpimg)
+      - name: 注入 KPM 补丁到内核镜像
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
           cd kernel
@@ -192,23 +224,24 @@ jobs:
             if [ -f "$f" ]; then KERNEL_IMAGE="$f"; break; fi
           done
           if [ -z "$KERNEL_IMAGE" ]; then
-            echo "ERROR: No kernel image found at arch/arm64/boot/"
+            echo "错误: 在 arch/arm64/boot/ 未找到内核镜像"
             ls -la arch/arm64/boot/
             exit 1
           fi
-          echo "Using kernel image: $KERNEL_IMAGE ($(stat -c%s "$KERNEL_IMAGE") bytes)"
+          echo "使用的内核镜像: $KERNEL_IMAGE ($(stat -c%s "$KERNEL_IMAGE") 字节)"
           
           cd "$GITHUB_WORKSPACE/KernelPatch"
-          echo "## Patching kernel image with kptools"
+          echo "## 正在使用 kptools 注入 KPM 补丁"
           ./tools/kptools -p kernel/kpimg -i "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE" \
             -o "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched"
-          echo "## Patched image size: $(stat -c%s $GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched) bytes"
-          # Replace original with patched version
+          echo "## 补丁后镜像大小: $(stat -c%s $GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched) 字节"
+          # 用补丁后的版本替换原始镜像
           cp "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched" "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE"
 
-      - name: Package flashable zip with AnyKernel3
+      - name: 使用 AnyKernel3 打包可刷入 zip
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
+          echo "正在使用 AnyKernel3 打包..."
           git clone --depth=1 "${{ env.ANYKERNEL3_REPO }}" anykernel3
           cp $GITHUB_WORKSPACE/anykernel3.cfg anykernel3/anykernel3.cfg
           
@@ -222,10 +255,10 @@ jobs:
           DATE=$(date +%Y%m%d)
           ZIP_NAME="OPPO-Reno-SDM710-${{ matrix.variant }}-${DATE}.zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" *
-          echo "## Final zip: $ZIP_NAME"
+          echo "## 最终 zip 包: $ZIP_NAME"
           ls -la "$GITHUB_WORKSPACE/$ZIP_NAME"
 
-      - name: Upload artifact
+      - name: 上传产物
         if: steps.variant_gate.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -235,14 +268,15 @@ jobs:
           compression-level: 0
 
   summary:
-    name: Build summary
+    name: 编译汇总
     needs: build
     runs-on: ubuntu-22.04
     if: always()
     steps:
-      - name: Summary
+      - name: 汇总信息
         run: |
-          echo "## Build summary"
-          echo "Both variants were attempted. Download artifacts from the build jobs above."
-          echo "- kpm-only: kernel with KernelPatch (KPM) support, no KernelSU"
-          echo "- ksu-kpm: kernel with both KernelSU-Next and KernelPatch (KPM) support"
+          echo "## 编译汇总"
+          echo "所有变体编译已尝试完成。请从上方各编译任务下载产物。"
+          echo "- kpm-only: 仅支持 KPM 模块，不含 KernelSU"
+          echo "- ksu-kpm: 同时支持 KernelSU-Next 和 KPM 模块"
+          echo "- suki-kpm: 同时支持 SukiSU-Ultra 和 KPM 模块"
