@@ -1,0 +1,15 @@
+# Kernel config fragment for KernelPatch (KPM) support
+# kptools needs kallsyms to resolve kernel symbols when injecting kpimg
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+CONFIG_KALLSYMS_BASE_RELATIVE=y
+CONFIG_KALLSYMS_ABSOLUTE_PERCPU=y
+# Ensure modules are supported (KPM modules are loaded as kprobes)
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+# Helpful for KPM runtime hooking
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_UPROBES=y
+CONFIG_UPROBE_EVENTS=y

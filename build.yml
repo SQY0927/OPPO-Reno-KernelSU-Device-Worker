@@ -1,0 +1,240 @@
+name: Build OPPO Reno SDM710 Kernel (KPM / KSU+KPM)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_kpm_only:
+        description: 'Build KPM-only boot (no KernelSU)'
+        type: boolean
+        default: true
+      build_ksu_kpm:
+        description: 'Build KernelSU + KPM boot'
+        type: boolean
+        default: true
+  push:
+    branches: [main, master]
+
+env:
+  # OPPO Reno (SDM710) kernel source
+  KERNEL_REPO: https://github.com/oppo-source/android_kernel_oppo_sdm710
+  KERNEL_BRANCH: oppo/sdm710_r_11.0_reno
+  DEFCONFIG: sdm670-perf_defconfig
+  # KernelSU-Next (FULL source integration for 4.9 kernels)
+  KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next
+  KSU_BRANCH: dev
+  # KernelPatch (KPM) - kpimg + kptools
+  KPM_REPO: https://github.com/bmax121/KernelPatch
+  # AnyKernel3 packaging
+  ANYKERNEL3_REPO: https://github.com/osm0sis/AnyKernel3
+  ARCH: arm64
+  SUBARCH: arm64
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [kpm-only, ksu-kpm]
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Decide whether to skip variant
+        id: variant_gate
+        run: |
+          SKIP="false"
+          if [ "${{ matrix.variant }}" = "kpm-only" ] && [ "${{ github.event.inputs.build_kpm_only }}" = "false" ]; then SKIP="true"; fi
+          if [ "${{ matrix.variant }}" = "ksu-kpm" ] && [ "${{ github.event.inputs.build_ksu_kpm }}" = "false" ]; then SKIP="true"; fi
+          echo "skip=$SKIP" >> $GITHUB_OUTPUT
+          echo "Event inputs: kpm_only=${{ github.event.inputs.build_kpm_only }} ksu_kpm=${{ github.event.inputs.build_ksu_kpm }}"
+
+      - name: Skip this variant (disabled)
+        if: steps.variant_gate.outputs.skip == 'true'
+        run: |
+          echo "Variant ${{ matrix.variant }} is disabled by input, skipping."
+          exit 0
+
+      - name: Free disk space
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          echo "== Disk usage before cleanup =="
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache
+          sudo apt-get clean
+          echo "== Disk usage after cleanup =="
+          df -h /
+
+      - name: Install build dependencies
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libncurses5-dev libssl-dev libelf-dev \
+            zip unzip curl wget git python3 ccache lld
+
+      - name: Download Clang toolchain (AOSP r383902 / Clang 11)
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          mkdir -p $HOME/toolchain/clang
+          cd /tmp
+          echo "Downloading AOSP Clang r383902 ..."
+          wget -q --tries=3 --retry-connrefused --waitretry=5 \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r48/clang-r383902.tar.gz" \
+            -O clang.tar.gz
+          tar -xzf clang.tar.gz -C $HOME/toolchain/clang
+          $HOME/toolchain/clang/bin/clang --version | head -3
+
+      - name: Download GCC toolchain (aarch64-linux-android-4.9)
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          mkdir -p $HOME/toolchain/gcc
+          cd /tmp
+          echo "Downloading AOSP GCC 4.9 ..."
+          wget -q --tries=3 --retry-connrefused --waitretry=5 \
+            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" \
+            -O gcc.tar.gz
+          tar -xzf gcc.tar.gz -C $HOME/toolchain/gcc
+          ls $HOME/toolchain/gcc/bin/ | head -5
+
+      - name: Export toolchain env
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          echo "$HOME/toolchain/clang/bin" >> $GITHUB_PATH
+          echo "$HOME/toolchain/gcc/bin" >> $GITHUB_PATH
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=$HOME/toolchain/gcc/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_USER=github-actions" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_HOST=cloud" >> $GITHUB_ENV
+
+      - name: Clone OPPO Reno SDM710 kernel source
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" "${{ env.KERNEL_REPO }}" kernel
+          cd kernel
+          echo "## Last commit"
+          git log -1 --format="%H %s (%ci)"
+          echo "## Kernel version"
+          make ARCH=arm64 kernelversion 2>&1 | head -3
+
+      - name: Apply KernelSU-Next integration (ksu-kpm variant only)
+        if: steps.variant_gate.outputs.skip != 'true' && matrix.variant == 'ksu-kpm'
+        run: |
+          git clone --depth=1 -b "${{ env.KSU_BRANCH }}" "${{ env.KSU_REPO }}" KernelSU-Next
+          cd kernel
+          # setup.sh must be run from the kernel source root.
+          # It symlinks KernelSU driver into drivers/kernelsu and edits Kconfig/Makefile.
+          ../KernelSU-Next/kernel/setup.sh
+          echo "## Verifying KSU integration"
+          ls -la drivers/kernelsu 2>&1 || echo "drivers/kernelsu symlink not found"
+          grep -l "KernelSU" drivers/Kconfig 2>&1 || echo "KSU not added to drivers/Kconfig"
+
+      - name: Apply kernel config fragments
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          cd kernel
+          # KPM fragment applies to BOTH variants (kptools needs kallsyms)
+          cat $GITHUB_WORKSPACE/configs/kpm.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+          # KSU fragment applies only to ksu-kpm variant
+          if [ "${{ matrix.variant }}" = "ksu-kpm" ]; then
+            cat $GITHUB_WORKSPACE/configs/ksu.fragment >> arch/arm64/configs/${{ env.DEFCONFIG }}
+          fi
+          echo "## Last 25 lines of ${{ env.DEFCONFIG }}"
+          tail -25 arch/arm64/configs/${{ env.DEFCONFIG }}
+
+      - name: Build kernel
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          cd kernel
+          echo "## Generating .config from ${{ env.DEFCONFIG }}"
+          make ARCH=arm64 ${{ env.DEFCONFIG }} CC=clang HOSTCC=clang HOSTCXX=clang++
+          echo "## Verifying key config flags"
+          grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
+          echo "## Building kernel (this can take ~30-60 min)"
+          make ARCH=arm64 -j"$(nproc)" CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            CROSS_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android- 2>&1 | tail -200
+          echo "## Build outputs"
+          ls -la arch/arm64/boot/
+
+      - name: Build KernelPatch (kpimg + kptools)
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          git clone --depth=1 "${{ env.KPM_REPO }}" KernelPatch
+          cd KernelPatch
+          echo "## Building kpimg"
+          make -C kernel kpimg
+          echo "## Building kptools"
+          make -C tools
+          echo "## Verifying outputs"
+          ls -la kernel/kpimg tools/kptools
+
+      - name: Patch kernel image with KPM (inject kpimg)
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          cd kernel
+          KERNEL_IMAGE=""
+          for f in arch/arm64/boot/Image.gz-dtb arch/arm64/boot/Image.gz arch/arm64/boot/Image; do
+            if [ -f "$f" ]; then KERNEL_IMAGE="$f"; break; fi
+          done
+          if [ -z "$KERNEL_IMAGE" ]; then
+            echo "ERROR: No kernel image found at arch/arm64/boot/"
+            ls -la arch/arm64/boot/
+            exit 1
+          fi
+          echo "Using kernel image: $KERNEL_IMAGE ($(stat -c%s "$KERNEL_IMAGE") bytes)"
+          
+          cd "$GITHUB_WORKSPACE/KernelPatch"
+          echo "## Patching kernel image with kptools"
+          ./tools/kptools -p kernel/kpimg -i "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE" \
+            -o "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched"
+          echo "## Patched image size: $(stat -c%s $GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched) bytes"
+          # Replace original with patched version
+          cp "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE.kpatched" "$GITHUB_WORKSPACE/kernel/$KERNEL_IMAGE"
+
+      - name: Package flashable zip with AnyKernel3
+        if: steps.variant_gate.outputs.skip != 'true'
+        run: |
+          git clone --depth=1 "${{ env.ANYKERNEL3_REPO }}" anykernel3
+          cp $GITHUB_WORKSPACE/anykernel3.cfg anykernel3/anykernel3.cfg
+          
+          KERNEL_IMAGE=""
+          for f in arch/arm64/boot/Image.gz-dtb arch/arm64/boot/Image.gz arch/arm64/boot/Image; do
+            if [ -f "kernel/$f" ]; then KERNEL_IMAGE="kernel/$f"; break; fi
+          done
+          cp "$KERNEL_IMAGE" anykernel3/Image
+          
+          cd anykernel3
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="OPPO-Reno-SDM710-${{ matrix.variant }}-${DATE}.zip"
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" *
+          echo "## Final zip: $ZIP_NAME"
+          ls -la "$GITHUB_WORKSPACE/$ZIP_NAME"
+
+      - name: Upload artifact
+        if: steps.variant_gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OPPO-Reno-SDM710-${{ matrix.variant }}
+          path: ${{ github.workspace }}/OPPO-Reno-SDM710-*.zip
+          retention-days: 30
+          compression-level: 0
+
+  summary:
+    name: Build summary
+    needs: build
+    runs-on: ubuntu-22.04
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Build summary"
+          echo "Both variants were attempted. Download artifacts from the build jobs above."
+          echo "- kpm-only: kernel with KernelPatch (KPM) support, no KernelSU"
+          echo "- ksu-kpm: kernel with both KernelSU-Next and KernelPatch (KPM) support"

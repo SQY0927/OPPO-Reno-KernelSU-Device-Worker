@@ -1,0 +1,11 @@
+# Kernel config fragment for KernelSU-Next
+# KernelSU-Next driver (full source integration for 4.9 kernels)
+CONFIG_KSU=y
+# KSU runtime dependencies
+CONFIG_SECURITY_SELINUX=y
+CONFIG_OVERLAY_FS=y
+CONFIG_FUSE_FS=y
+# Workers / misc
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
