@@ -83,6 +83,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libncurses5-dev libssl-dev libelf-dev \
             zip unzip curl wget git python3 ccache lld
+          # 内核 4.9 脚本使用 Python 2 语法，安装 python2 并设为默认
+          sudo apt-get install -y python2 || true
+          sudo ln -sf /usr/bin/python2 /usr/local/bin/python || true
+          python --version 2>&1 || echo "python2 未安装，将修复脚本兼容性"
 
       - name: 下载 Clang 工具链 (AOSP r383902 / Clang 11)
         if: steps.variant_gate.outputs.skip != 'true'
@@ -282,6 +286,34 @@ jobs:
         run: |
           set -o pipefail
           cd kernel
+          # 如果 python2 不可用，修复 Python 2 脚本兼容性
+          if ! python --version 2>&1 | grep -q "Python 2"; then
+            echo "## python2 不可用，修复 Python 2 脚本兼容性..."
+            # 修复 gcc-wrapper.py 的 print 语句
+            if [ -f scripts/gcc-wrapper.py ]; then
+              python3 -c "
+              import re
+              with open('scripts/gcc-wrapper.py', 'r') as f:
+                  s = f.read()
+              # print >> sys.stderr, X -> print(X, file=sys.stderr)
+              s = re.sub(r'print >> sys\.stderr, (.+)', lambda m: 'print(' + m.group(1) + ', file=sys.stderr)', s)
+              with open('scripts/gcc-wrapper.py', 'w') as f:
+                  f.write(s)
+              "
+              echo "  已修复 gcc-wrapper.py"
+            fi
+            # 修复其他常见 Python 2 脚本
+            find scripts -name "*.py" -exec python3 -c "
+              import sys, re
+              for fn in sys.argv[1:]:
+                  with open(fn) as f: s = f.read()
+                  if 'print >>' in s:
+                      s = re.sub(r'print >> sys\.stderr, (.+)', lambda m: 'print(' + m.group(1) + ', file=sys.stderr)', s)
+                      s = re.sub(r'print >> sys\.stdout, (.+)', lambda m: 'print(' + m.group(1) + ', file=sys.stdout)', s)
+                      with open(fn, 'w') as f: f.write(s)
+                      print(f'  已修复 {fn}')
+              " {} +
+          fi
           echo "## 调试信息: CLANG_TRIPLE=$CLANG_TRIPLE"
           echo "## 调试信息: CROSS_COMPILE=$CROSS_COMPILE"
           echo "## 调试信息: GCC=$(${CROSS_COMPILE}gcc --version 2>&1 | head -1)"
