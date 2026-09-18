@@ -151,25 +151,22 @@ jobs:
 
       - name: Build kernel
         if: steps.variant_gate.outputs.skip != 'true'
+        env:
+          CLANG_TRIPLE: aarch64-linux-android-
         run: |
           cd kernel
-          # CLANG_TRIPLE is required by Android kernel build system when using AOSP Clang
-          export CLANG_TRIPLE=aarch64-linux-android-
-          export CROSS_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=$HOME/toolchain/gcc/bin/arm-linux-androideabi-
+          echo "## DEBUG: CLANG_TRIPLE=$CLANG_TRIPLE"
+          echo "## DEBUG: CROSS_COMPILE=$CROSS_COMPILE"
+          echo "## DEBUG: CC=$(which clang)"
+          clang --version | head -2
           echo "## Generating .config from ${{ env.DEFCONFIG }}"
           make ARCH=arm64 ${{ env.DEFCONFIG }} \
-            CC=clang HOSTCC=clang HOSTCXX=clang++ \
-            CLANG_TRIPLE=$CLANG_TRIPLE \
-            CROSS_COMPILE=$CROSS_COMPILE
+            CC=clang HOSTCC=clang HOSTCXX=clang++
           echo "## Verifying key config flags"
           grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
           echo "## Building kernel (this can take ~30-60 min)"
           make ARCH=arm64 -j"$(nproc)" \
             CC=clang HOSTCC=clang HOSTCXX=clang++ \
-            CLANG_TRIPLE=$CLANG_TRIPLE \
-            CROSS_COMPILE=$CROSS_COMPILE \
-            CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump 2>&1 | tail -300
           echo "## Build outputs"
           ls -la arch/arm64/boot/
