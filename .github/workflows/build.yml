@@ -132,28 +132,24 @@ jobs:
           echo "## 内核版本"
           make ARCH=arm64 kernelversion 2>&1 | head -3
 
-      - name: 合并 OPPO 内核模块和设备树仓库
+      - name: 验证 vendor 源码完整性
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
-          echo "正在克隆 OPPO 内核模块和设备树仓库..."
-          git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" \
-            "https://github.com/oppo-source/android_kernel_modules_and_devicetree_oppo_sdm710" \
-            modules_devicetree
-          echo "## 仓库结构"
-          find modules_devicetree -type d | head -20
-          echo "## 正在合并模块文件到内核源码树..."
-          if [ -d modules_devicetree/source/android/vendor ]; then
-            mkdir -p kernel/vendor
-            cp -rl modules_devicetree/source/android/vendor/* kernel/vendor/ 2>/dev/null || \
-              cp -r modules_devicetree/source/android/vendor/* kernel/vendor/
-            echo "## 已合并 vendor 目录"
-            find kernel/vendor -name "Kconfig" -exec echo "  发现 Kconfig: {}" \;
+          cd kernel
+          echo "## 验证 vendor 源码完整性..."
+          # 内核源码已自带 vendor 目录，无需从外部仓库合并
+          echo "## foreground_io_opt 源码检查:"
+          if [ -d vendor/oplus/kernel/oplus_performance/foreground_io_opt ]; then
+            echo "  ✓ 源码目录存在"
+            ls -la vendor/oplus/kernel/oplus_performance/foreground_io_opt/ | head -10
+          else
+            echo "  ✗ 源码目录不存在"
           fi
-          # 同时检查是否有 devicetree 相关文件
-          if [ -d modules_devicetree/source/android/vendor/oplus/kernel ]; then
-            echo "## oplus kernel 模块目录:"
-            find modules_devicetree/source/android/vendor/oplus/kernel -type d
-          fi
+          echo "## block/oppo_foreground_io_opt 符号链接:"
+          ls -la block/oppo_foreground_io_opt 2>&1
+          echo "## vendor 目录统计:"
+          find vendor -name "Kconfig" | wc -l
+          echo " 个 Kconfig 文件"
 
       - name: 集成 KernelSU-Next（仅 ksu-kpm 变体）
         if: steps.variant_gate.outputs.skip != 'true' && matrix.variant == 'ksu-kpm'
