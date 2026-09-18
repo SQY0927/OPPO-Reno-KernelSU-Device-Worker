@@ -301,8 +301,18 @@ jobs:
           echo "正在克隆并编译 KernelPatch..."
           git clone --depth=1 "${{ env.KPM_REPO }}" KernelPatch
           cd KernelPatch
+          echo "## GCC 工具链检查"
+          ls -la $HOME/toolchain/gcc/bin/aarch64-linux-android-gcc* 2>/dev/null || echo "  AOSP GCC 不存在，使用系统交叉编译器"
+          if [ ! -x "$HOME/toolchain/gcc/bin/aarch64-linux-android-gcc" ]; then
+            echo "  安装 gcc-aarch64-linux-gnu 作为替代..."
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            export TARGET_COMPILE=aarch64-linux-gnu-
+          else
+            export TARGET_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-
+          fi
+          echo "## TARGET_COMPILE=$TARGET_COMPILE"
           echo "## 编译 kpimg"
-          make -C kernel kpimg TARGET_COMPILE=aarch64-linux-android- LD=llvm-lld
+          make -C kernel kpimg TARGET_COMPILE="$TARGET_COMPILE"
           echo "## 编译 kptools"
           make -C tools
           echo "## 验证产物"
