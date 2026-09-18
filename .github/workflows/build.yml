@@ -91,6 +91,16 @@ jobs:
           # 验证交叉编译器
           aarch64-linux-gnu-gcc --version | head -1
 
+      - name: 恢复 ccache 缓存
+        id: ccache-cache
+        if: steps.variant_gate.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ matrix.variant }}-ccache-${{ env.KERNEL_BRANCH }}
+          restore-keys: |
+            ${{ matrix.variant }}-ccache-
+
       - name: 下载 Clang 工具链 (AOSP r383902 / Clang 11)
         if: steps.variant_gate.outputs.skip != 'true'
         run: |
@@ -121,6 +131,14 @@ jobs:
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "KBUILD_BUILD_USER=github-actions" >> $GITHUB_ENV
           echo "KBUILD_BUILD_HOST=cloud" >> $GITHUB_ENV
+          # ccache 配置
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=time_macros,file_macro,include_file_mtime,ifdef" >> $GITHUB_ENV
+          mkdir -p $HOME/.ccache
+          ccache -M 2G -z
+          echo "## ccache 已配置，缓存目录: $HOME/.ccache"
 
       - name: 克隆 OPPO Reno SDM710 内核源码
         if: steps.variant_gate.outputs.skip != 'true'
@@ -319,10 +337,16 @@ jobs:
           make ARCH=arm64 olddefconfig
           echo "## 验证关键配置项"
           grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OPPO_FG_IO_OPT)" .config || true
-          echo "## 正在编译内核（约需 30-60 分钟）"
-          # 保存完整日志，只显示最后 500 行，但保留完整退出码
+          echo "## 正在编译内核（约需 30-60 分钟，已启用 ccache）"
+          echo "## 编译前 ccache 统计:"
+          ccache -s
+          # 通过 ccache 调用交叉编译器（cc-name 仍检测为 gcc，不触发 CLANG_TRIPLE 检查）
           make ARCH=arm64 -j"$(nproc)" \
-            HOSTCC=gcc HOSTCXX=g++ 2>&1 | tee /tmp/kernel_build.log | tail -500
+            CC="ccache aarch64-linux-gnu-gcc" \
+            HOSTCC="ccache gcc" HOSTCXX="ccache g++" \
+            2>&1 | tee /tmp/kernel_build.log | tail -500
+          echo "## 编译后 ccache 统计:"
+          ccache -s
           echo "## 编译产物"
           ls -la arch/arm64/boot/
           # 检查内核镜像是否存在
