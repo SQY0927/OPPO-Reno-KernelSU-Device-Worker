@@ -311,6 +311,8 @@ jobs:
             export TARGET_COMPILE=$HOME/toolchain/gcc/bin/aarch64-linux-android-
           fi
           echo "## TARGET_COMPILE=$TARGET_COMPILE"
+          # 禁用 stack-protector（Ubuntu GCC 默认启用，KernelPatch 不需要）
+          sed -i 's/-Wall/-Wall -fno-stack-protector -fno-pie/g' kernel/Makefile
           echo "## 编译 kpimg"
           make -C kernel kpimg TARGET_COMPILE="$TARGET_COMPILE"
           echo "## 编译 kptools"
