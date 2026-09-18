@@ -340,11 +340,33 @@ jobs:
           echo "## 正在编译内核（约需 30-60 分钟，已启用 ccache）"
           echo "## 编译前 ccache 统计:"
           ccache -s
-          # 通过 ccache 调用交叉编译器（cc-name 仍检测为 gcc，不触发 CLANG_TRIPLE 检查）
+          # ===== 进度百分比监控 =====
+          # 1) 用 make 干跑统计总编译目标数（只列出不执行，约 1-3 分钟）
+          echo "## 正在干跑统计总编译目标数（约 1-3 分钟，请稍候）..."
+          TOTAL=$(make ARCH=arm64 -n 2>/dev/null | grep -cE '\-c +\-o +[^ ]+\.o ' || true)
+          [ -z "$TOTAL" ] && TOTAL=0
+          if [ "$TOTAL" -lt 1000 ]; then
+            echo "## 干跑统计失败，改用源码文件数估算..."
+            TOTAL=$(find arch drivers fs kernel lib mm net block security sound crypto virt vendor certs -name '*.c' -o -name '*.S' 2>/dev/null | wc -l)
+          fi
+          echo "## 预计总编译目标数: $TOTAL"
+          # 2) 后台监视器：每 60 秒打印一次进度，精确到 0.01%
+          touch /tmp/.ksu_build_marker
+          (
+            while true; do
+              sleep 60
+              DONE=$(find . -name '*.o' -newer /tmp/.ksu_build_marker 2>/dev/null | wc -l)
+              PCT=$(awk "BEGIN{printf \"%.2f\", ($DONE*100)/$TOTAL}")
+              echo "## [编译进度] ${DONE}/${TOTAL} (${PCT}%)  已用时 ${SECONDS}s"
+            done
+          ) &
+          WATCHER_PID=$!
+          # 3) 正式编译（通过 ccache 调用交叉编译器，cc-name 仍检测为 gcc）
           make ARCH=arm64 -j"$(nproc)" \
             CC="ccache aarch64-linux-gnu-gcc" \
             HOSTCC="ccache gcc" HOSTCXX="ccache g++" \
             2>&1 | tee /tmp/kernel_build.log | tail -500
+          kill $WATCHER_PID 2>/dev/null || true
           echo "## 编译后 ccache 统计:"
           ccache -s
           echo "## 编译产物"
