@@ -186,19 +186,16 @@ jobs:
           cd kernel
           echo "## 调试信息: CLANG_TRIPLE=$CLANG_TRIPLE"
           echo "## 调试信息: CROSS_COMPILE=$CROSS_COMPILE"
-          echo "## 调试信息: CC=$(which clang)"
-          clang --version | head -2
+          echo "## 调试信息: GCC=$($CROSS_COMPILE gcc -version 2>&1 | head -1)"
+          # 使用 GCC 编译，避免 OPPO Makefile 的 Clang CLANG_TRIPLE 检查
+          # OPPO 4.9 内核原生支持 GCC 4.9 编译
           echo "## 正在从 ${{ env.DEFCONFIG }} 生成 .config"
-          make ARCH=arm64 ${{ env.DEFCONFIG }} \
-            CC=clang HOSTCC=clang HOSTCXX=clang++ \
-            CLANG_TRIPLE=aarch64-linux-android-
+          make ARCH=arm64 ${{ env.DEFCONFIG }}
           echo "## 验证关键配置项"
           grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OVERLAY_FS|FUSE_FS)" .config || true
           echo "## 正在编译内核（约需 30-60 分钟）"
           make ARCH=arm64 -j"$(nproc)" \
-            CC=clang HOSTCC=clang HOSTCXX=clang++ \
-            CLANG_TRIPLE=aarch64-linux-android- \
-            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump 2>&1 | tail -300
+            HOSTCC=gcc HOSTCXX=g++ 2>&1 | tail -300
           echo "## 编译产物"
           ls -la arch/arm64/boot/
 
