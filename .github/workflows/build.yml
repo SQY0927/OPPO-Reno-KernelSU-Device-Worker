@@ -316,6 +316,11 @@ jobs:
           echo "## 编译 kpimg"
           make -C kernel kpimg TARGET_COMPILE="$TARGET_COMPILE"
           echo "## 编译 kptools"
+          # 将 kernel 目录中的头文件链接到 tools 目录
+          find kernel -name "preset.h" -exec ln -sf "$(pwd)/{}" tools/preset.h \; 2>/dev/null || true
+          find kernel -name "kpimg.h" -exec ln -sf "$(pwd)/{}" tools/kpimg.h \; 2>/dev/null || true
+          # 添加 kernel include 路径
+          sed -i 's/-I\. -I\.\/lib/-I. -I.\/lib -I..\/kernel -I..\/kernel\/include -I..\/kernel\/patch\/include/g' tools/Makefile 2>/dev/null || true
           make -C tools
           echo "## 验证产物"
           ls -la kernel/kpimg tools/kptools
