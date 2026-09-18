@@ -280,6 +280,7 @@ jobs:
         env:
           CLANG_TRIPLE: aarch64-linux-android-
         run: |
+          set -o pipefail
           cd kernel
           echo "## 调试信息: CLANG_TRIPLE=$CLANG_TRIPLE"
           echo "## 调试信息: CROSS_COMPILE=$CROSS_COMPILE"
@@ -290,10 +291,17 @@ jobs:
           echo "## 验证关键配置项"
           grep -E "CONFIG_(KALLSYMS|KALLSYMS_ALL|KSU|KPM|KPROBES|OPPO_FG_IO_OPT)" .config || true
           echo "## 正在编译内核（约需 30-60 分钟）"
+          # 保存完整日志，只显示最后 500 行，但保留完整退出码
           make ARCH=arm64 -j"$(nproc)" \
-            HOSTCC=gcc HOSTCXX=g++ 2>&1 | tail -300
+            HOSTCC=gcc HOSTCXX=g++ 2>&1 | tee /tmp/kernel_build.log | tail -500
           echo "## 编译产物"
           ls -la arch/arm64/boot/
+          # 检查内核镜像是否存在
+          if [ ! -f arch/arm64/boot/Image ] && [ ! -f arch/arm64/boot/Image.gz ]; then
+            echo "## 错误: 内核镜像未生成！显示最后 200 行日志:"
+            tail -200 /tmp/kernel_build.log
+            exit 1
+          fi
 
       - name: 编译 KernelPatch (kpimg + kptools)
         if: steps.variant_gate.outputs.skip != 'true'
